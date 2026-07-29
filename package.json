@@ -1,0 +1,75 @@
+{
+  "name": "port-mapper",
+  "version": "0.1.0",
+  "description": "Pure JavaScript NAT port mapping for Node.js \u2014 UPnP-IGD, NAT-PMP and PCP. Client, server and diagnostics.",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "src/",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "nat",
+    "port-mapping",
+    "port-forwarding",
+    "upnp",
+    "upnp-igd",
+    "igd",
+    "nat-pmp",
+    "natpmp",
+    "pcp",
+    "rfc6886",
+    "rfc6887",
+    "cgnat",
+    "router",
+    "gateway",
+    "p2p",
+    "electron",
+    "zero-dependencies"
+  ],
+  "author": {
+    "name": "colocohen"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/colocohen/port-mapper.git"
+  },
+  "bugs": {
+    "url": "https://github.com/colocohen/port-mapper/issues"
+  },
+  "homepage": "https://github.com/colocohen/port-mapper#readme",
+  "funding": [
+    {
+      "type": "github",
+      "url": "https://github.com/sponsors/colocohen"
+    }
+  ],
+  "dependencies": {
+    "@rgrove/parse-xml": "^4.2.3"
+  },
+  "optionalDependencies": {
+    "turn-server": "^0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "turn-server": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
