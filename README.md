@@ -367,12 +367,24 @@ Full control. One Mapper handles one address family.
 const mapper = createMapper({ description: 'MyApp' })
 
 mapper.start((err, info) => {
-  // info: { protocol, gateway, externalIp, device, family, results }
+  // info: { protocol, gateway, externalIp, addressKind, device, family, results }
 })
 
+mapper.getInfo()    // the same info object, or null before negotiation settles
 mapper.stop(cb)     // shut down, leaving mappings in place
 mapper.close(cb)    // unmap everything first, then shut down
 ```
+
+`start()` is **joinable**: a Mapper is naturally process-wide (discovery is
+expensive and one gateway serves everyone), so sharing one instance is the
+normal pattern — and every sharer can just call `start()`. Calls during an
+in-flight negotiation wait for it; calls after it settled get the cached
+outcome asynchronously; the negotiation itself runs once. Callers that
+start exactly once see no difference. `getInfo()` gives a late joiner the
+negotiation outcome — including `addressKind` (`'public'` / `'cgnat'` /
+`'private'`), which answers *whether mapping is even worth doing* before a
+single mapping is made. `stop()` during a pending start fails the waiting
+callbacks with a state error rather than stranding them.
 
 **Mapping**
 
@@ -383,8 +395,20 @@ const handle = mapper.map({
   protocol: 'tcp',
   lifetime: 7200,
   exact: false,
-  description: 'MyApp'
-}, (err, mapping) => {})
+  description: 'MyApp',
+  checkLocalPort: false     // per-call override of the mapper-level option —
+                            // a shared Mapper can serve one caller that owns
+                            // its socket (skip the advisory) and another
+                            // that wants the safety net
+}, (err, mapping) => {
+  // mapping: { protocol, internalPort, externalIp, externalPort,
+  //            lifetime, via: 'pcp'|'natpmp'|'upnp'|'upnp-pinhole',
+  //            addressKind: 'public'|'cgnat'|'private'|... }
+  //
+  // addressKind is the same classification start() reports — so a caller
+  // holding externalIp 100.71.3.9 doesn't need to know 100.64.0.0/10 by
+  // heart to see the mapping can't be reached from the internet.
+})
 
 handle.cancel('user closed the window')   // abandon it if it has not answered
 
@@ -760,6 +784,15 @@ a table walk that recursed once per entry.
 
 
 ## 🎯 Use cases
+
+- **WebRTC ICE gathering** — a gateway mapping advertised as an srflx
+  candidate is a real forwarding rule: reachable by any peer, working
+  behind symmetric NAT where STUN srflx fails, no relay in the media path.
+  The [`turn-server`](https://npmjs.com/package/turn-server) ICE agent and
+  [`webrtc-server`](https://npmjs.com/package/webrtc-server) use
+  port-mapper for exactly this (one shared Mapper per process, joinable
+  `start()`, per-call `checkLocalPort: false`, `addressKind` as the CGNAT
+  gate).
 
 #### A desktop app that needs to be reachable
 
