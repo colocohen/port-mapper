@@ -412,7 +412,11 @@ function Mapper(options) {
   var announce_socket = null;
   var ssdp_socket = null;
 
-  var started = false;
+  var started = false;         // start() was called (sockets may still be opening)
+  var start_settled = false;   // negotiation finished (ok or not)
+  var start_err = null;
+  var start_info = null;
+  var start_waiters = [];      // start() callbacks awaiting negotiation
   var destroyed = false;
   var chosen = null;
   var bind_address = options.bindAddress || '0.0.0.0';
@@ -546,15 +550,28 @@ function Mapper(options) {
 
   function start(cb) {
     cb = cb || function() {};
-    if (started)   return cb(new PortMapStateError('Mapper already started', 'started'));
     if (destroyed) return cb(new PortMapStateError('Mapper destroyed', 'destroyed'));
+
+    // A Mapper is naturally process-wide — discovery is expensive and one
+    // gateway serves everyone — so a shared instance is the common pattern.
+    // start() therefore joins rather than rejects:
+    //   - negotiation already finished → the cached outcome, asynchronously
+    //   - negotiation in flight       → wait with everyone else
+    //   - fresh                       → run it
+    // Callers that start() exactly once see no difference.
+    if (started) {
+      if (start_settled) return setImmediate(cb, start_err, start_info);
+      start_waiters.push(cb);
+      return;
+    }
+    started = true;
+    start_waiters.push(cb);
 
     var waiting = 1;   // held until both opens have been requested
     function ready() {
       if (--waiting > 0) return;
-      started = true;
       if (pmp) pmp.listening();
-      run_negotiation(cb);
+      run_negotiation(settle_start);
     }
 
     if (pmp) {
@@ -572,6 +589,25 @@ function Mapper(options) {
     }
 
     ready();
+  }
+
+  function settle_start(err, info) {
+    start_settled = true;
+    start_err = err || null;
+    start_info = info || null;
+    var waiters = start_waiters;
+    start_waiters = [];
+    for (var i = 0; i < waiters.length; i++) waiters[i](start_err, start_info);
+  }
+
+  /**
+   * The outcome of negotiation, or null before it settles: the same info
+   * object start() delivered ({ protocol, gateway, externalIp, addressKind,
+   * behindNat, ... }). Lets a late joiner of a shared Mapper read where it
+   * is without having captured the start() callback.
+   */
+  function getInfo() {
+    return start_info;
   }
 
 
@@ -762,7 +798,11 @@ function Mapper(options) {
     // and it looks like a complete success from every side: the gateway does
     // exactly what it was asked and the traffic arrives nowhere. Advisory
     // only — a service bound to one specific address can be invisible to this.
-    if (options.checkLocalPort === false || !opts.internalPort) {
+    // Per-call override first: a shared Mapper can serve one caller that
+    // owns its socket (and skips the check — e.g. an ICE agent mapping a
+    // port it just bound) and another that wants the safety net, without
+    // reconfiguring the whole instance.
+    if (opts.checkLocalPort === false || options.checkLocalPort === false || !opts.internalPort) {
       return send_map(opts, cb);
     }
 
@@ -825,7 +865,8 @@ function Mapper(options) {
           uniqueId:     pinhole.uniqueId,
           lifetime:     pinhole.leaseTime,
           via:          'upnp-pinhole',
-          state:        'ACTIVE'
+          state:        'ACTIVE',
+          addressKind:  wire.classify_external_address(pinhole.internalIp)
         });
       });
       return { cancel: function() { return false; } };
@@ -834,6 +875,13 @@ function Mapper(options) {
     return chosen.session.map(opts, function(err, mapping) {
       if (err) return cb(err);
       index[(mapping.protocol || 'tcp') + ':' + mapping.internalPort] = mapping.externalPort;
+      // Same classification start() already puts on its info: a caller
+      // holding a mapping with externalIp 100.71.3.9 should not need to
+      // know 100.64.0.0/10 by heart to see that it is CGNAT and the
+      // mapping cannot be reached from outside.
+      if (mapping.externalIp) {
+        mapping.addressKind = wire.classify_external_address(mapping.externalIp);
+      }
       cb(null, mapping);
     });
   }
@@ -1361,6 +1409,7 @@ function Mapper(options) {
   /* ================ Accessors ================ */
 
   self.start = start;
+  self.getInfo = getInfo;
   self.map = map;
   self.unmap = unmap;
   self.getExternalIp = getExternalIp;
@@ -1537,6 +1586,13 @@ function Mapper(options) {
     if (destroyed) { if (cb) setImmediate(cb); return; }
     destroyed = true;
     remove_exit_hook();
+
+    // Anyone still waiting on start() gets an answer rather than silence.
+    // (run_negotiation's destroyed-guard returns without calling back, so
+    // without this a stop() during negotiation strands the waiters forever.)
+    if (start_waiters.length > 0 && !start_settled) {
+      settle_start(new PortMapStateError('Mapper stopped during start', 'destroyed'), null);
+    }
 
     if (pmp) pmp.destroy();
     if (upnp) upnp.destroy();
